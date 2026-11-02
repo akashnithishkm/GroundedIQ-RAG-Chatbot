@@ -1,0 +1,14 @@
+# Local credentials; keep these ignored even when no env file exists yet.
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Local Python environment and bytecode.
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated vector database and user-provided PDFs.
+chroma_db/
+documents/*
+!documents/.gitkeep
