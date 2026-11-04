@@ -21,7 +21,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the conversational flow and key desig
 
 ## Setup
 
-Python 3.10+ is required. On Windows PowerShell:
+Python 3.11+ is required by the supported Streamlit version. On Windows PowerShell:
 
 ```powershell
 python -m venv .venv
