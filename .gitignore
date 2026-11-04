@@ -1,14 +1,34 @@
-# Local credentials; keep these ignored even when no env file exists yet.
+# Credentials and local configuration
 .env
 .env.*
+!.env.example
 .streamlit/secrets.toml
+.streamlit/secrets.*
 
-# Local Python environment and bytecode.
+# Python and tooling
 .venv/
+venv/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
 
-# Generated vector database and user-provided PDFs.
+# User data and databases
 chroma_db/
 documents/*
 !documents/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+logs/
+*.log
+.coverage
+htmlcov/
+coverage.xml
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,3 @@
+[server]
+# Keep the uploader's displayed limit aligned with rag_app.config.MAX_UPLOAD_BYTES.
+maxUploadSize = 25

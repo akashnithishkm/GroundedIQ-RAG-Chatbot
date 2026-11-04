@@ -1,1207 +1,499 @@
+"""Polished Streamlit interface for the local document RAG assistant."""
+
+import logging, os, time
 from pathlib import Path
-
-import chromadb
 import streamlit as st
-
-from ingest import CHROMA_DIR, COLLECTION_NAME, ingest_pdf, get_vectorstore
-from rag_graph import DEFAULT_MODELS, PROVIDER_MODELS, build_rag_graph
-
-
-# ============================================================
-# 1. CONFIGURATION
-# ============================================================
-
-st.set_page_config(
-    page_title="PDF RAG | GenAI Assistant",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
+from rag_app.config import (
+    BASE_DIR,
+    DOCUMENTS_DIR,
+    MAX_UPLOAD_BYTES,
+    PROVIDER_MODELS,
+    DEFAULT_MODELS,
 )
+from rag_app.history import (
+    add_message,
+    create_conversation,
+    delete_conversation,
+    get_messages,
+    list_conversations,
+    rename_conversation,
+)
+from rag_app.ingestion import ingest_file
+from rag_app.security import safe_error, safe_filename
+from rag_app.storage import (
+    clear_index,
+    delete_chroma_database,
+    delete_document,
+    indexed_documents,
+)
+from rag_app.workflow import NO_EVIDENCE, build_rag_graph
 
-BASE_DIR = Path(__file__).resolve().parent
-
-DOCUMENTS_DIR = BASE_DIR / "documents"
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+log = logging.getLogger("rag_app")
+st.set_page_config(
+    page_title="GroundedIQ RAG Chatbot · Conversational Document Intelligence",
+    page_icon=":material/auto_awesome:",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+st.markdown(
+    """<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+:root{--ink:#15233a;--muted:#66758a;--line:#e5ebf2;--blue:#315be8;--wash:#f5f8fc}
+.stApp{background:linear-gradient(145deg,#f9fbfe 0%,#f2f6fb 58%,#edf3fa 100%);color:var(--ink);font-family:'DM Sans',sans-serif}
+.block-container{padding-top:2rem;max-width:1440px}.hero{padding:1.55rem 1.8rem;border:1px solid #e6ebf4;border-radius:23px;background:linear-gradient(115deg,#fff 4%,#f4f7ff 70%,#f0f5ff);box-shadow:0 12px 38px #2946750b;margin-bottom:1.2rem}
+.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#526ce0;font-weight:700}.hero h1{font:800 clamp(28px,3vw,41px) 'Manrope',sans-serif;letter-spacing:-1.7px;margin:7px 0 5px;color:#16243d}.hero p{margin:0;color:#65748b;font-size:15px}
+[data-testid="stSidebar"]{background:#fff;border-right:1px solid #e7edf5}.stButton>button,.stFormSubmitButton>button{border-radius:11px;border:1px solid #dbe3ee;font-weight:600;min-height:42px}.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"]{background:#315be8;border-color:#315be8;color:white}
+[data-testid="stChatMessage"]{background:white;border:1px solid #e7edf3;border-radius:16px;padding:12px 16px;box-shadow:0 4px 16px #203d6608}.stChatInput textarea{border-radius:14px}.metric-label{color:#76859a;font-size:12px}.metric-value{font:700 24px Manrope;color:#182944}.stCaption{color:#738198}.section-note{padding:12px 14px;border-radius:12px;background:#f4f7fc;color:#65748a;font-size:13px;border:1px solid #e7edf5}
+</style>""",
+    unsafe_allow_html=True,
+)
 DOCUMENTS_DIR.mkdir(exist_ok=True)
 
 
-# ============================================================
-# 2. CUSTOM CSS - PREMIUM DARK UI
-# ============================================================
-
-st.markdown("""
-<style>
-
-/* ---------- GLOBAL ---------- */
-
-.stApp {
-    background:
-        radial-gradient(ellipse at 80% 0%, rgba(91, 54, 190, 0.20), transparent 35%),
-        radial-gradient(ellipse at 40% 60%, rgba(0, 140, 255, 0.08), transparent 40%),
-        #080d20;
-    color: #edf1ff;
-}
-
-header[data-testid="stHeader"] {
-    background: rgba(8, 13, 32, 0.8);
-}
-
-.block-container {
-    max-width: 1600px;
-    padding-top: 1.8rem;
-    padding-bottom: 2rem;
-}
-
-/* ---------- SIDEBAR ---------- */
-
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #11152e 0%, #171638 100%);
-    border-right: 1px solid rgba(130, 140, 255, 0.20);
-}
-
-section[data-testid="stSidebar"] * {
-    color: #edf1ff;
-}
-
-section[data-testid="stSidebar"] [data-testid="stSelectbox"] [role="combobox"],
-section[data-testid="stSidebar"] [data-testid="stSelectbox"] input {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-}
-
-.brand {
-    font-size: 25px;
-    font-weight: 800;
-    letter-spacing: -1px;
-    background: linear-gradient(90deg, #a78bfa, #38bdf8);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.brand-caption {
-    color: #a6afd0;
-    font-size: 12px;
-    margin-top: -8px;
-    margin-bottom: 25px;
-}
-
-/* ---------- HEADINGS ---------- */
-
-.hero-title {
-    font-size: clamp(25px, 3vw, 39px);
-    font-weight: 800;
-    line-height: 1.2;
-    letter-spacing: -1.3px;
-    color: #f7f8ff;
-}
-
-.gradient-text {
-    background: linear-gradient(90deg, #38bdf8, #a78bfa, #e879f9);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.subheading {
-    color: #a9b4d4;
-    font-size: 14px;
-    margin-top: 8px;
-    margin-bottom: 20px;
-}
-
-/* ---------- STAT CARDS ---------- */
-
-.stat-card {
-    background: linear-gradient(
-        135deg,
-        rgba(36, 48, 91, 0.80),
-        rgba(30, 25, 73, 0.75)
-    );
-    border: 1px solid rgba(123, 151, 255, 0.30);
-    border-radius: 16px;
-    padding: 15px 13px;
-    min-height: 88px;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.stat-label {
-    color: #aab7d8;
-    font-size: 12px;
-}
-
-.stat-value {
-    font-size: 25px;
-    font-weight: 800;
-    color: #f7f8ff;
-    margin-top: 5px;
-}
-
-/* ---------- PANELS ---------- */
-
-.glass-panel {
-    background: linear-gradient(
-        145deg,
-        rgba(21, 29, 58, 0.96),
-        rgba(16, 23, 47, 0.94)
-    );
-    border: 1px solid rgba(112, 137, 220, 0.35);
-    border-radius: 19px;
-    padding: 19px;
-    box-shadow: 0 12px 35px rgba(0,0,0,0.20);
-    margin-bottom: 15px;
-}
-
-.panel-title {
-    color: #f4f6ff;
-    font-size: 17px;
-    font-weight: 750;
-    margin-bottom: 5px;
-}
-
-.panel-caption {
-    color: #9caaca;
-    font-size: 12px;
-    margin-bottom: 15px;
-}
-
-/* ---------- CHAT ---------- */
-
-.welcome-card {
-    background: linear-gradient(
-        120deg,
-        rgba(35, 49, 91, 0.92),
-        rgba(42, 38, 91, 0.85)
-    );
-    border: 1px solid rgba(128, 151, 255, 0.32);
-    border-radius: 17px;
-    padding: 21px;
-    margin-bottom: 17px;
-}
-
-.welcome-title {
-    font-size: 19px;
-    font-weight: 750;
-    color: #ffffff;
-}
-
-.welcome-text {
-    color: #c6d0ed;
-    font-size: 13px;
-    line-height: 1.7;
-}
-
-.feature-pill {
-    display: inline-block;
-    background: rgba(72, 93, 160, 0.25);
-    border: 1px solid rgba(128, 157, 255, 0.30);
-    color: #c6d9ff;
-    padding: 7px 10px;
-    border-radius: 20px;
-    font-size: 11px;
-    margin: 5px 4px 0 0;
-}
-
-.user-bubble {
-    background: linear-gradient(110deg, #793ce0, #4245c9);
-    border: 1px solid #a879ff;
-    border-radius: 17px 17px 4px 17px;
-    padding: 13px 17px;
-    color: white;
-    margin: 8px 0;
-}
-
-.assistant-bubble {
-    background: linear-gradient(
-        130deg,
-        rgba(31, 43, 78, 0.98),
-        rgba(26, 35, 68, 0.96)
-    );
-    border: 1px solid rgba(104, 143, 230, 0.35);
-    border-radius: 17px;
-    padding: 17px;
-    color: #edf2ff;
-    margin: 8px 0;
-}
-
-/* ---------- DOCUMENT CARDS ---------- */
-
-.document-card {
-    background: rgba(39, 52, 91, 0.65);
-    border: 1px solid rgba(117, 146, 225, 0.32);
-    border-radius: 12px;
-    padding: 12px;
-    margin: 8px 0;
-}
-
-.document-name {
-    color: #f3f5ff;
-    font-size: 12px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-}
-
-.document-meta {
-    color: #a9b7d9;
-    font-size: 11px;
-    margin-top: 5px;
-}
-
-.source-card {
-    background: rgba(39, 64, 112, 0.55);
-    border: 1px solid rgba(94, 167, 255, 0.35);
-    border-radius: 10px;
-    padding: 10px;
-    margin-top: 8px;
-    color: #dceaff;
-    font-size: 11px;
-}
-
-/* ---------- BUTTONS ---------- */
-
-.stButton > button {
-    background: linear-gradient(100deg, #a34cf1, #397ff0);
-    color: white !important;
-    border: 1px solid rgba(193, 151, 255, 0.5);
-    border-radius: 11px;
-    font-weight: 700;
-    min-height: 43px;
-    transition: all 0.2s ease;
-}
-
-.stButton > button:hover {
-    border-color: #c6a0ff;
-    box-shadow: 0 0 20px rgba(140, 90, 255, 0.35);
-    transform: translateY(-1px);
-}
-
-/* ---------- INPUTS ---------- */
-
-.stChatInput textarea {
-    background: #192342 !important;
-    color: white !important;
-    border-radius: 12px !important;
-}
-
-[data-testid="stTextInput"] [data-baseweb="input"] {
-    background: #ffffff !important;
-    border: 1px solid rgba(124, 150, 225, 0.65) !important;
-    border-radius: 12px !important;
-}
-
-[data-testid="stTextInput"] [data-baseweb="input"]:focus-within {
-    border-color: #a78bfa !important;
-    box-shadow: 0 0 0 1px #a78bfa !important;
-}
-
-[data-testid="stTextInput"] input {
-    background: #ffffff !important;
-    color: #111827 !important;
-    -webkit-text-fill-color: #111827 !important;
-    caret-color: #111827 !important;
-    border: 0 !important;
-    border-radius: 12px !important;
-}
-
-[data-testid="stTextInput"] input::placeholder {
-    color: #111827 !important;
-    -webkit-text-fill-color: #111827 !important;
-    opacity: 1 !important;
-}
-
-[data-testid="stTextInput"] button {
-    background: #ffffff !important;
-    color: #475569 !important;
-    -webkit-text-fill-color: #475569 !important;
-    border: 0 !important;
-}
-
-[data-testid="stTextInput"] button * {
-    color: #475569 !important;
-    -webkit-text-fill-color: #475569 !important;
-}
-
-[data-testid="stFormSubmitButton"] button,
-[data-testid="stFormSubmitButton"] button:hover,
-[data-testid="stFormSubmitButton"] button:focus,
-.stFormSubmitButton > button,
-.stFormSubmitButton > button:hover,
-.stFormSubmitButton > button:focus {
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-}
-
-[data-testid="stFileUploader"] {
-    background: rgba(32, 44, 79, 0.55);
-    border: 1px dashed rgba(130, 164, 255, 0.65);
-    border-radius: 14px;
-    padding: 8px;
-}
-
-[data-testid="stChatMessage"] {
-    background: transparent;
-    border: none;
-}
-
-/* ---------- MISC ---------- */
-
-hr {
-    border-color: rgba(132, 150, 210, 0.20);
-}
-
-div[data-testid="stExpander"] {
-    background: rgba(35, 47, 83, 0.45);
-    border: 1px solid rgba(120, 145, 215, 0.25);
-    border-radius: 12px;
-}
-
-.small-muted {
-    color: #94a4c8;
-    font-size: 11px;
-}
-
-.stCaption {
-    color: #aab8d6;
-}
-
-/* PDF uploader text and button styling */
-
-/* Make "Choose PDF files" text white */
-[data-testid="stFileUploader"] label,
-[data-testid="stFileUploader"] label span,
-[data-testid="stFileUploaderDropzoneInstructions"] {
-    color: #ffffff !important;
-}
-
-/* Make the Upload button black */
-[data-testid="stFileUploader"] button {
-    background: #000000 !important;
-    color: #ffffff !important;
-    border: 1px solid #555555 !important;
-    border-radius: 8px !important;
-}
-
-/* Upload button hover */
-[data-testid="stFileUploader"] button:hover {
-    background: #222222 !important;
-    border-color: #a78bfa !important;
-    color: #ffffff !important;
-}
-
-/* Chat input placeholder color */
-.stChatInput textarea::placeholder {
-    color: #ffffff !important;
-    opacity: 1 !important;
-}
-
-/* Typed text color */
-.stChatInput textarea {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-    caret-color: #ffffff !important;
-}
-
-/* Chat input background */
-.stChatInput textarea {
-    background-color: #192342 !important;
-}
-
-/* ===================================
-   FORCE ALL CHAT TEXT TO WHITE
-=================================== */
-
-/* User and assistant chat messages */
-[data-testid="stChatMessage"],
-[data-testid="stChatMessage"] p,
-[data-testid="stChatMessage"] div,
-[data-testid="stChatMessage"] span,
-[data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] strong {
-    color: #ffffff !important;
-}
-
-/* Chat input placeholder */
-[data-testid="stChatInput"] textarea::placeholder {
-    color: #ffffff !important;
-    opacity: 1 !important;
-}
-
-/* Chat input typed text */
-[data-testid="stChatInput"] textarea {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-    caret-color: #ffffff !important;
-}
-
-/* Loading and spinner messages */
-[data-testid="stSpinner"],
-[data-testid="stSpinner"] *,
-.stSpinner,
-.stSpinner * {
-    color: #ffffff !important;
-}
-
-/* Status and informational messages */
-[data-testid="stStatusWidget"],
-[data-testid="stStatusWidget"] *,
-.stAlert,
-.stAlert * {
-    color: #ffffff !important;
-}
-
-/* Chat timestamps and captions */
-[data-testid="stChatMessage"] small,
-[data-testid="stChatMessage"] .stCaption {
-    color: #ffffff !important;
-}
-
-/* Chat buttons and icons */
-[data-testid="stChatMessage"] button {
-    color: #ffffff !important;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# ============================================================
-# 3. SESSION STATE
-# ============================================================
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "processed_files" not in st.session_state:
-    st.session_state.processed_files = []
-
-if "last_processing_results" not in st.session_state:
-    st.session_state.last_processing_results = []
-
-
-# ============================================================
-# 4. HELPER FUNCTIONS
-# ============================================================
-
-def get_database_stats():
-
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    collections = client.list_collections()
-    if COLLECTION_NAME not in {collection.name for collection in collections}:
-        return 0, {}
-
-    collection = client.get_collection(name=COLLECTION_NAME)
-    data = collection.get(include=["metadatas"])
-    metadatas = data.get("metadatas") or []
-    document_counts = {}
-    for metadata in metadatas:
-        if metadata:
-            filename = metadata.get("source", "Unknown")
-            document_counts[filename] = document_counts.get(filename, 0) + 1
-
-    return len(data.get("ids", [])), document_counts
-
-
-def process_pdf_paths(file_paths):
-    if not api_key:
-        st.error("Enter a Google API key to generate PDF embeddings.")
-        return
-
-    processing_results = []
-    progress_bar = st.progress(0)
-
-    for index, file_path in enumerate(file_paths):
+def read_secret(name):
+    value = os.getenv(name, "")
+    if not value:
         try:
-            with st.status(
-                f"Processing {file_path.name}...",
-                expanded=True
-            ) as status:
-                result = ingest_pdf(file_path=file_path, api_key=api_key)
-                st.write(f"Pages: {result['pages']}")
-                st.write(f"Chunks: {result['chunks']}")
-                status.update(
-                    label=f"Completed: {file_path.name}",
-                    state="complete"
-                )
-            processing_results.append(result)
-        except Exception as error:
-            st.error(
-                f"Could not process {file_path.name}: {sanitize_error(error)}"
-            )
+            value = st.secrets.get(name, "")
+        except Exception:
+            pass
+    return value or ""
 
-        progress_bar.progress((index + 1) / len(file_paths))
-
-    st.session_state.last_processing_results = processing_results
-    if processing_results:
-        st.success(f"Successfully processed {len(processing_results)} PDF(s)!")
-        st.rerun()
-
-
-def format_sources(sources):
-
-    if not sources:
-        return
-
-    st.markdown("**📎 Sources used**")
-
-    columns = st.columns(min(len(sources), 3))
-
-    for index, source in enumerate(sources):
-
-        with columns[index % len(columns)]:
-
-            filename = source.get("source", "Unknown PDF")
-            page = source.get("page", "?")
-
-            st.markdown(
-                f"""
-                <div class="source-card">
-                    📄 <b>{filename}</b><br>
-                    <span class="small-muted">Page {page}</span>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-
-def sanitize_error(error):
-    error_text = str(error)
-    for secret in (api_key, openrouter_api_key):
-        if secret:
-            error_text = error_text.replace(secret, "[redacted]")
-    return error_text
-
-
-def clear_api_keys():
-    st.session_state.pop("google_api_key", None)
-    st.session_state.pop("openrouter_api_key", None)
-
-
-def show_error(error):
-
-    error_text = sanitize_error(error)
-    normalized_error = error_text.lower()
-
-    if "openrouter" in normalized_error and (
-        "401" in normalized_error
-        or "unauthorized" in normalized_error
-        or "user not found" in normalized_error
-    ):
-
-        st.error(
-            "OpenRouter rejected the API key (401 Unauthorized). Create a "
-            "new key in your OpenRouter account, enter it in the API keys "
-            "section, and retry. Do not paste the key into chat."
-        )
-
-    elif "ollama" in normalized_error and (
-        "winerror 10061" in normalized_error
-        or "connection refused" in normalized_error
-        or "actively refused" in normalized_error
-    ):
-
-        st.error(
-            "Cannot connect to Ollama at http://localhost:11434. Install "
-            "Ollama for Windows and start the Ollama app (or run `ollama "
-            "serve` in a terminal). Then download the selected model with "
-            f"`ollama pull {selected_model}` and retry. You can verify it "
-            "with `ollama list`."
-        )
-
-    elif "ollama" in normalized_error and (
-        "not found" in normalized_error or "status code: 404" in normalized_error
-    ):
-
-        st.error(
-            f"The Ollama model `{selected_model}` is not installed. "
-            f"Install it with `ollama pull {selected_model}`, verify with "
-            "`ollama list`, and retry."
-        )
-
-    elif "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-
-        st.error(
-            "A provider quota or rate limit was reached during generation "
-            "or Google-powered document retrieval. Check the relevant "
-            "provider quota and try again. "
-            f"Details: {error_text}"
-        )
-
-    elif "403" in error_text or "PERMISSION_DENIED" in error_text:
-
-        st.error(
-            "API permission denied. Check the selected provider's API key "
-            "and the Google API key used for document embeddings. "
-            f"Details: {error_text}"
-        )
-
-    else:
-
-        st.error(f"Application error: {error_text}")
-
-
-# ============================================================
-# 5. SIDEBAR / BRANDING
-# ============================================================
 
 with st.sidebar:
-
-    st.markdown(
-        """
-        <div style="padding: 12px 0 20px 0;">
-            <div class="brand">📚 PDF RAG</div>
-            <div class="brand">CHATBOT</div>
-            <div class="brand-caption">
-                Chat with your Documents ✨
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("### 🧠 Choose your AI provider")
-    selected_provider = st.selectbox(
-        "Generation provider",
-        options=list(PROVIDER_MODELS),
-        key="generation_provider",
-    )
-    selected_model = st.selectbox(
-        "Model",
-        options=PROVIDER_MODELS[selected_provider],
-        index=PROVIDER_MODELS[selected_provider].index(
-            DEFAULT_MODELS[selected_provider]
-        ),
-        key=f"generation_model_{selected_provider}",
-    )
-
-    provider_descriptions = {
-        "Gemini": "Primary · Google cloud generation",
-        "OpenRouter": "Backup · Cloud models, including free options",
-        "Ollama": "Local · Runs on your laptop; no API key",
-    }
-    st.caption(provider_descriptions[selected_provider])
-
-    auto_fallback = st.checkbox(
-        "Enable automatic fallback",
-        value=False,
-        help=(
-            "Try your selected provider first. If it fails, try the remaining "
-            "providers in this order: Gemini, OpenRouter, Ollama."
-        ),
-    )
-
-    st.markdown("### 🔐 API keys")
-    st.caption(
-        "Keys are kept in this Streamlit session only and are not written "
-        "to project files. Only enter keys on an app instance you trust."
-    )
-    openrouter_required = (
-        selected_provider == "OpenRouter" or auto_fallback
-    )
-    with st.form("api_keys"):
-        st.text_input(
-            "Google API key (PDF embeddings and retrieval)",
-            type="password",
-            placeholder="Paste your Google API key",
-            key="google_api_key",
-            help=(
-                "Required for PDF embeddings and retrieval, regardless of "
-                "which provider generates answers."
-            ),
-        )
-        st.text_input(
-            "OpenRouter API key "
-            f"({'required' if openrouter_required else 'optional'})",
-            type="password",
-            placeholder="Paste your OpenRouter API key",
-            key="openrouter_api_key",
-            help=(
-                "OpenRouter requires an API key, including for its free "
-                "models. Needed when selected or enabled as a fallback."
-            ),
-        )
-        keys_submitted = st.form_submit_button("Save API keys")
-
-    api_key = st.session_state.get("google_api_key", "").strip()
-    openrouter_api_key = st.session_state.get(
-        "openrouter_api_key", ""
-    ).strip()
-
-    if keys_submitted:
-        if api_key:
-            st.success("API keys saved for this session.")
-        else:
-            st.warning("Enter a Google API key to process and search PDFs.")
-
-    st.button(
-        "Clear API keys",
-        key="clear_api_keys",
-        on_click=clear_api_keys,
-    )
-
-    if not api_key:
-        st.warning(
-            "Google is always needed to embed and search PDFs. The selected "
-            "provider (Gemini, OpenRouter, or Ollama) generates the answer."
-        )
-    elif openrouter_required and not openrouter_api_key:
-        st.warning(
-            "Enter an OpenRouter API key above to use OpenRouter"
-            + (
-                " as a fallback."
-                if auto_fallback and selected_provider != "OpenRouter"
-                else "."
-            )
-            + " Google API access is still used for document embeddings."
-        )
-    elif selected_provider == "Ollama":
-        st.info(
-            "Install Ollama for Windows and keep the Ollama app running. "
-            f"Download this model once with `ollama pull {selected_model}`. "
-            "The local API should be available at localhost:11434."
-        )
-
+    st.markdown("## :material/auto_awesome: GroundedIQ RAG Chatbot")
+    st.caption("Private document intelligence")
     st.divider()
-
-    st.markdown("### 💬 Workspace")
-
-    st.markdown(
-        """
-        <div class="document-card">
-            💬 <b>AI Document Chat</b><br>
-            <span class="small-muted">Ask questions from your PDFs</span>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if st.button("🗑️ Clear Conversation", use_container_width=True):
-
-        st.session_state.messages = []
+    conversations = list_conversations()
+    if (
+        "conversation_id" not in st.session_state
+        or st.session_state.conversation_id not in {r[0] for r in conversations}
+    ):
+        st.session_state.conversation_id = create_conversation()
         st.rerun()
-
-    st.divider()
-
-    st.markdown("### ⚡ Capabilities")
-
-    st.markdown(
-        """
-        <div style="line-height:2.3; color:#d8e2ff; font-size:13px;">
-            ✅ Multiple PDF uploads<br>
-            ✅ Gemini, OpenRouter, or local Ollama answers<br>
-            ✅ Source page references<br>
-            ✅ Vector similarity search<br>
-            ✅ Persistent document storage<br>
-            ✅ LangGraph workflow
-        </div>
-        """,
-        unsafe_allow_html=True
+    if st.button(":material/add: New chat", width="stretch", type="primary"):
+        st.session_state.conversation_id = create_conversation()
+        st.rerun()
+    conversations = list_conversations()
+    selected = st.selectbox(
+        "Conversations",
+        options=[r[0] for r in conversations],
+        format_func=lambda cid: next(
+            (r[1] for r in conversations if r[0] == cid), "Conversation"
+        ),
+        index=next(
+            (
+                i
+                for i, r in enumerate(conversations)
+                if r[0] == st.session_state.conversation_id
+            ),
+            0,
+        ),
     )
-
-    st.divider()
-
-    st.markdown("### 🧠 Technology Stack")
-
-    st.markdown(
-        """
-        <div class="small-muted" style="line-height:2;">
-            🐍 Python<br>
-            🔗 LangChain<br>
-            🔀 LangGraph<br>
-            ✨ Gemini · OpenRouter · Ollama<br>
-            🗄️ ChromaDB<br>
-            🎈 Streamlit
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.divider()
-
-    st.markdown(
-        """
-        <div class="small-muted">
-            Built as a Generative AI RAG project.<br>
-            Version 1.0
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
-# 6. MAIN HEADER
-# ============================================================
-
-st.markdown(
-    """
-    <div class="hero-title">
-        💬 Chat with your PDFs using
-        <span class="gradient-text">Gen AI</span>
-    </div>
-    <div class="subheading">
-        Upload your documents, ask questions, and get
-        contextual answers with source references.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# 7. LIVE DATABASE STATISTICS
-# ============================================================
-
-total_chunks, document_counts = get_database_stats()
-stored_files = sorted(document_counts)
-
-stat1, stat2, stat3 = st.columns(3)
-
-with stat1:
-
-    st.markdown(
-        f"""
-        <div class="stat-card">
-            <div class="stat-label">📄 Indexed Documents</div>
-            <div class="stat-value">{len(stored_files)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with stat2:
-
-    st.markdown(
-        f"""
-        <div class="stat-card">
-            <div class="stat-label">🧩 Stored Chunks</div>
-            <div class="stat-value">{total_chunks}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with stat3:
-
-    st.markdown(
-        f"""
-        <div class="stat-card">
-            <div class="stat-label">🗄️ Vector Database</div>
-            <div class="stat-value">ChromaDB</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-st.write("")
-
-
-# ============================================================
-# 8. THREE-PANEL MAIN WORKSPACE
-# ============================================================
-
-chat_column, document_column = st.columns(
-    [0.69, 0.31],
-    gap="medium"
-)
-
-
-# ============================================================
-# 9. CHAT WORKSPACE
-# ============================================================
-
-with chat_column:
-
-    st.markdown(
-        """
-        <div class="glass-panel">
-            <div class="welcome-title">
-                🤖 Hello! I'm your PDF RAG Assistant.
-            </div>
-            <div class="welcome-text">
-                Upload one or more PDF documents and ask
-                questions about their content. I'll search
-                your documents and provide contextual answers.
-            </div>
-            <br>
-            <span class="feature-pill">🔍 Search & Answer</span>
-            <span class="feature-pill">📄 Page References</span>
-            <span class="feature-pill">🧠 Context Retrieval</span>
-            <span class="feature-pill">⚡ Gemini · OpenRouter · Ollama</span>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # Display previous messages
-    for message in st.session_state.messages:
-
-        avatar = "🤖" if message["role"] == "assistant" else "👤"
-
-        with st.chat_message(
-            message["role"],
-            avatar=avatar
-        ):
-
-            st.markdown(message["content"])
-
-            if message["role"] == "assistant":
-
-                if message.get("provider"):
-                    st.caption(
-                        f"Provider: {message['provider']} · "
-                        f"Model: {message.get('model', 'unknown')}"
-                    )
-                    if (
-                        message.get("requested_provider")
-                        and message["provider"] != message["requested_provider"]
-                    ):
-                        st.info(
-                            f"Fallback used: {message['requested_provider']} "
-                            f"was unavailable; answered with {message['provider']}."
-                        )
-
-                format_sources(
-                    message.get("sources", [])
-                )
-
-    # Chat input
-    question = st.chat_input(
-        "Ask a question about your documents..."
-    )
-
-    if question:
-
-        if not api_key:
-
-            st.warning(
-                "Enter a Google API key in the sidebar to search your PDFs."
-            )
-
-        elif total_chunks == 0:
-
-            st.warning(
-                "Upload and process at least one PDF before asking questions."
-            )
-
-        else:
-
-            st.session_state.messages.append(
-                {
-                    "role": "user",
-                    "content": question
-                }
-            )
-
-            with st.chat_message("user", avatar="👤"):
-                st.markdown(question)
-
-            try:
-
-                with st.chat_message("assistant", avatar="🤖"):
-
-                    with st.spinner(
-                        "✨ Searching documents and thinking..."
-                    ):
-
-                        rag_graph = build_rag_graph(
-                            api_key=api_key,
-                            top_k=4,
-                            provider=selected_provider,
-                            model=selected_model,
-                            provider_api_key=openrouter_api_key,
-                            auto_fallback=auto_fallback,
-                        )
-
-                        result = rag_graph.invoke(
-                            {
-                                "question": question,
-                                "context": "",
-                                "answer": "",
-                                "sources": [],
-                                "active_provider": "",
-                                "active_model": "",
-                            }
-                        )
-
-                        answer = result["answer"]
-                        sources = result["sources"]
-                        active_provider = result["active_provider"]
-                        active_model = result["active_model"]
-
-                    st.markdown(answer)
-                    st.caption(
-                        f"Provider: {active_provider} · Model: "
-                        f"{active_model or 'not used'}"
-                    )
-                    if active_provider not in {
-                        selected_provider,
-                        "Not used",
-                    }:
-                        st.info(
-                            f"Fallback used: {selected_provider} was "
-                            f"unavailable; answered with {active_provider}."
-                        )
-
-                    format_sources(sources)
-
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": sources,
-                        "provider": active_provider,
-                        "model": active_model,
-                        "requested_provider": selected_provider,
-                    }
-                )
-
-            except Exception as error:
-
-                show_error(error)
-
-                st.session_state.messages.pop()
-
-# ============================================================
-# 10. DOCUMENT MANAGEMENT PANEL
-# ============================================================
-
-with document_column:
-
-    st.markdown(
-        """
-        <div class="glass-panel">
-            <div class="panel-title">☁️ Upload Documents</div>
-            <div class="panel-caption">
-                Add PDF documents to your knowledge base.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    uploaded_files = st.file_uploader(
-        "Choose PDF files",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="pdf_uploader"
-    )
-
-    if st.button("⚙️ Process Uploaded PDFs", use_container_width=True):
-
-        if not uploaded_files:
-
-            st.warning("Please select at least one PDF.")
-
-        else:
-            local_files = []
-            for uploaded_file in uploaded_files:
-                safe_name = Path(uploaded_file.name).name
-                file_path = DOCUMENTS_DIR / safe_name
-                file_path.write_bytes(uploaded_file.getvalue())
-                local_files.append(file_path)
-
-            process_pdf_paths(local_files)
-
-    local_pdf_files = sorted(DOCUMENTS_DIR.glob("*.pdf"))
-    unindexed_local_files = [
-        file_path
-        for file_path in local_pdf_files
-        if file_path.name not in document_counts
-    ]
-
-    if local_pdf_files:
-        st.markdown("**PDFs saved in `documents/`**")
-        for file_path in local_pdf_files:
-            chunk_count = document_counts.get(file_path.name, 0)
-            status = (
-                f"Indexed · {chunk_count} chunks"
-                if chunk_count
-                else "Not indexed yet"
-            )
-            st.caption(f"{file_path.name} — {status}")
-
-        if unindexed_local_files and st.button(
-            "⚙️ Process PDFs already in documents/",
-            key="process_saved_pdfs",
-            use_container_width=True,
-        ):
-            process_pdf_paths(unindexed_local_files)
-
-
-    # ========================================================
-    # 11. INDEXED DOCUMENTS
-    # ========================================================
-
-    st.write("")
-
-    st.markdown(
-        f"""
-        <div class="glass-panel">
-            <div class="panel-title">
-                🗂️ Indexed Documents ({len(stored_files)})
-            </div>
-            <div class="panel-caption">
-                Documents currently stored in ChromaDB.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if stored_files:
-
-        for filename in stored_files:
-
-            chunk_count = document_counts.get(
-                filename,
-                0
-            )
-
-            st.markdown(
-                f"""
-                <div class="document-card">
-                    <div class="document-name">
-                        📕 {filename}
-                    </div>
-                    <div class="document-meta">
-                        🧩 {chunk_count} chunks
-                        &nbsp;&nbsp; <span style="color:#34d399;">● Indexed</span>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    else:
-
-        st.markdown(
-            """
-            <div class="document-card">
-                <div class="document-meta">
-                    No indexed documents yet.<br>
-                    Upload a PDF to get started.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
+    if selected != st.session_state.conversation_id:
+        st.session_state.conversation_id = selected
+        st.rerun()
+    with st.expander("Conversation actions"):
+        current_name = next((r[1] for r in conversations if r[0] == selected), "")
+        new_name = st.text_input(
+            "Rename conversation", value=current_name, key="rename_value"
         )
+        if st.button("Save name", key="rename_chat"):
+            rename_conversation(selected, new_name)
+            st.rerun()
+        if st.button("Delete this conversation", key="delete_chat"):
+            st.session_state.confirm_delete_chat = True
+        if st.session_state.get("confirm_delete_chat"):
+            st.warning("This permanently deletes this conversation and its messages.")
+            a, b = st.columns(2)
+            if a.button("Confirm delete", key="yes_delete_chat"):
+                delete_conversation(selected)
+                st.session_state.conversation_id = create_conversation()
+                st.session_state.confirm_delete_chat = False
+                st.rerun()
+            if b.button("Cancel", key="no_delete_chat"):
+                st.session_state.confirm_delete_chat = False
+                st.rerun()
+    st.divider()
+    st.subheader("Answer engine")
+    provider = st.selectbox("Provider", list(PROVIDER_MODELS), key="provider")
+    model = st.selectbox(
+        "Model",
+        PROVIDER_MODELS[provider],
+        index=PROVIDER_MODELS[provider].index(DEFAULT_MODELS[provider]),
+        key=f"model_{provider}",
+    )
+    temperature = st.slider(
+        "Temperature",
+        0.0,
+        1.0,
+        0.1,
+        0.05,
+        help="Lower values produce more consistent document-grounded answers.",
+    )
+    google_key = st.text_input(
+        "Google API key · embeddings and Gemini",
+        value=read_secret("GOOGLE_API_KEY"),
+        type="password",
+        help="Session-only input; environment variable or Streamlit secrets also work.",
+    )
+    openrouter_key = st.text_input(
+        "OpenRouter API key", value=read_secret("OPENROUTER_API_KEY"), type="password"
+    )
+    st.caption("Secrets are not stored in conversation history or project files.")
+    st.divider()
+    st.subheader("Retrieval")
+    top_k = st.slider("Passages to retrieve", 1, 12, 4)
+    retrieval_mode = st.selectbox("Search mode", ["Similarity", "MMR", "Hybrid"])
+    st.caption(
+        {
+            "Similarity": "Ranks by embedding similarity. Fast and precise for direct questions.",
+            "MMR": "Balances similarity with passage diversity.",
+            "Hybrid": "Combines vector and keyword ranks with reciprocal-rank fusion.",
+        }[retrieval_mode]
+    )
+    st.caption(
+        "Embeddings use Google gemini-embedding-001. Changing embedding models requires a separate collection and full reindex."
+    )
 
-
-# ============================================================
-# 12. FOOTER
-# ============================================================
-
+total_chunks, files = indexed_documents()
 st.markdown(
-    """
-    <br>
-    <div style="
-        text-align:center;
-        color:#7685aa;
-        font-size:11px;
-        padding:15px;
-        border-top:1px solid rgba(130,150,220,0.15);
-    ">
-        Powered by LangChain · LangGraph · Gemini · OpenRouter · Ollama · ChromaDB
-        <br>
-        PDF RAG Assistant | Generative AI Project
-    </div>
-    """,
-    unsafe_allow_html=True
+    '<div class="hero"><div class="eyebrow">Your knowledge, in context</div><h1>Document intelligence, grounded.</h1><p>Ask across your files, follow the thread, and inspect the passages behind every answer.</p></div>',
+    unsafe_allow_html=True,
+)
+m1, m2, m3 = st.columns(3)
+with m1:
+    st.metric("Indexed files", len(files))
+with m2:
+    st.metric("Searchable passages", total_chunks)
+with m3:
+    st.metric("Search strategy", retrieval_mode)
+chat_tab, library_tab, eval_tab = st.tabs(["Chat", "Library & indexing", "Evaluation"])
+
+with chat_tab:
+    msgs = get_messages(st.session_state.conversation_id)
+    st.markdown("### :material/smart_toy: GroundedIQ assistant")
+    st.caption(
+        "Ask naturally, explore follow-ups, and open the source cards to verify each response."
+    )
+    if not msgs:
+        with st.container(border=True):
+            st.markdown(
+                "### Welcome to GroundedIQ RAG Chatbot. What would you like to learn?"
+            )
+            st.write(
+                "I can search your documents, summarize key ideas, compare details, and keep track of follow-up questions."
+            )
+            st.caption(
+                "Answers are grounded in your indexed files, with source passages you can inspect."
+            )
+        if files:
+            st.markdown("**Try a starter question**")
+            suggestions = [
+                "Summarize the key points",
+                "Find the important dates and numbers",
+                "What does this document say about…?",
+            ]
+            cols = st.columns(3)
+            for i, suggestion in enumerate(suggestions):
+                if cols[i].button(suggestion, key=f"chat_starter_{i}", width="stretch"):
+                    st.session_state.pending_prompt = suggestion
+                    st.rerun()
+        else:
+            st.info(
+                "Add a PDF, Word file, text file, or CSV in **Library & indexing** to start chatting."
+            )
+    for msg in msgs:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant":
+                if msg.get("provider"):
+                    st.caption(
+                        f"{msg['provider']} · {msg.get('model','')} · {msg.get('latency',0):.1f}s"
+                    )
+                if msg.get("sources"):
+                    with st.expander(f"Sources · {len(msg['sources'])}"):
+                        for i, src in enumerate(msg["sources"], 1):
+                            location = (
+                                f"Page {src['page']}"
+                                if src.get("page")
+                                else (
+                                    f"Row {src['row']}"
+                                    if src.get("row")
+                                    else src.get("section") or "Passage"
+                                )
+                            )
+                            st.markdown(
+                                f"**[{i}] {src['source']}** · {location}\n\n> {src['snippet']}"
+                            )
+    typed_question = st.chat_input("Ask GroundedIQ about your indexed documents…")
+    question = st.session_state.pop("pending_prompt", None) or typed_question
+    if question:
+        add_message(st.session_state.conversation_id, "user", question)
+        if not files:
+            add_message(st.session_state.conversation_id, "assistant", NO_EVIDENCE)
+            st.rerun()
+        if not google_key:
+            st.error(
+                "Add a Google API key in the sidebar to search and embed documents."
+            )
+        elif provider == "OpenRouter" and not openrouter_key:
+            st.error("Add an OpenRouter API key in the sidebar to use that provider.")
+        else:
+            start = time.perf_counter()
+            try:
+                with st.spinner(
+                    "GroundedIQ is searching your documents and preparing a grounded answer…"
+                ):
+                    graph = build_rag_graph(
+                        google_key,
+                        top_k,
+                        provider,
+                        model,
+                        openrouter_key,
+                        temperature,
+                        retrieval_mode,
+                    )
+                    result = graph.invoke(
+                        {
+                            "question": question,
+                            "history": msgs,
+                            "provider": provider,
+                            "model": model,
+                            "retrieval_mode": retrieval_mode,
+                        }
+                    )
+                elapsed = time.perf_counter() - start
+                add_message(
+                    st.session_state.conversation_id,
+                    "assistant",
+                    result["answer"],
+                    result.get("sources"),
+                    result.get("active_provider"),
+                    result.get("active_model"),
+                    elapsed,
+                )
+                st.rerun()
+            except Exception as exc:
+                log.warning("RAG request failed (%s)", type(exc).__name__)
+                st.error(
+                    f"Request failed: {safe_error(exc,[google_key,openrouter_key])}"
+                )
+
+with library_tab:
+    left, right = st.columns([1.1, 0.9], gap="large")
+    with left:
+        st.subheader("Add documents")
+        uploads = st.file_uploader(
+            "PDF, TXT, DOCX, or CSV · up to 25 MB each",
+            type=["pdf", "txt", "docx", "csv"],
+            accept_multiple_files=True,
+        )
+        if st.button("Index selected files", type="primary", disabled=not uploads):
+            if not google_key:
+                st.error("Add a Google API key in the sidebar to create embeddings.")
+            else:
+                for upload in uploads:
+                    if upload.size > MAX_UPLOAD_BYTES:
+                        st.error(f"{upload.name}: file exceeds 25 MB.")
+                        continue
+                    try:
+                        name = safe_filename(upload.name)
+                        target = (DOCUMENTS_DIR / name).resolve()
+                        if target.parent != DOCUMENTS_DIR.resolve():
+                            raise ValueError("Unsafe filename.")
+                        target.write_bytes(upload.getvalue())
+                        result = ingest_file(target, google_key)
+                        (st.info if result["status"] == "duplicate" else st.success)(
+                            f"{result['filename']}: {result['status']} · {result['chunks']} chunks"
+                        )
+                    except Exception as exc:
+                        st.error(
+                            f"{upload.name}: {safe_error(exc,[google_key,openrouter_key])}"
+                        )
+                st.rerun()
+        st.caption(
+            "Uploads are saved in the project documents folder. Reindexing replaces that filename's vectors after successful extraction."
+        )
+        local = sorted(
+            p
+            for p in DOCUMENTS_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in {".pdf", ".txt", ".docx", ".csv"}
+        )
+        unindexed = [p for p in local if p.name not in files]
+        if unindexed and st.button(
+            "Index files already in documents/", width="stretch"
+        ):
+            if not google_key:
+                st.error("Add a Google API key first.")
+            else:
+                for p in unindexed:
+                    try:
+                        st.success(f"{p.name}: {ingest_file(p,google_key)['status']}")
+                    except Exception as exc:
+                        st.error(f"{p.name}: {safe_error(exc,[google_key])}")
+                st.rerun()
+    with right:
+        st.subheader(f"Indexed documents · {len(files)}")
+        if not files:
+            st.info(
+                "No indexed documents yet. Upload a file or index an existing local document."
+            )
+        for name, meta in files.items():
+            with st.container(border=True):
+                st.markdown(f"**{name}**")
+                st.caption(
+                    f"{meta['chunks']} chunks · {meta['embedding_model']} · indexed"
+                )
+                c1, c2 = st.columns(2)
+                if c1.button("Reindex", key=f"reindex_{name}"):
+                    path = DOCUMENTS_DIR / Path(name).name
+                    if not google_key:
+                        st.error("Add a Google API key first.")
+                    elif path.exists():
+                        try:
+                            st.success(str(ingest_file(path, google_key, replace=True)))
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(safe_error(exc, [google_key]))
+                    else:
+                        st.warning(
+                            "Local upload is missing. Upload the file again before reindexing."
+                        )
+                if c2.button("Remove from index", key=f"rm_index_{name}"):
+                    st.session_state.pending_index_delete = name
+                if st.session_state.get("pending_index_delete") == name:
+                    st.warning(
+                        f"This removes vectors for {name}; the uploaded file stays in documents/."
+                    )
+                    a, b = st.columns(2)
+                    if a.button("Confirm removal", key=f"confirm_rm_{name}"):
+                        delete_document(name, google_key)
+                        st.session_state.pop("pending_index_delete")
+                        st.rerun()
+                    if b.button("Cancel", key=f"cancel_rm_{name}"):
+                        st.session_state.pop("pending_index_delete")
+                        st.rerun()
+                if name in {p.name for p in local} and st.button(
+                    "Delete uploaded file only", key=f"rm_upload_{name}"
+                ):
+                    st.session_state.pending_upload_delete = name
+                if st.session_state.get("pending_upload_delete") == name:
+                    st.warning(
+                        f"This permanently deletes documents/{name}. Indexed vectors remain unchanged."
+                    )
+                    a, b = st.columns(2)
+                    if a.button("Confirm file deletion", key=f"yes_upload_{name}"):
+                        from rag_app.storage import remove_upload
+
+                        remove_upload(name)
+                        st.session_state.pop("pending_upload_delete")
+                        st.rerun()
+                    if b.button("Cancel", key=f"no_upload_{name}"):
+                        st.session_state.pop("pending_upload_delete")
+                        st.rerun()
+    st.divider()
+    st.subheader("Start fresh")
+    st.caption(
+        "These actions only affect the configured documents/ folder and chroma_db/ database. Conversation history and API keys remain untouched."
+    )
+    with st.expander("Review fresh-start actions"):
+        files_local = [p.name for p in local]
+        st.markdown(
+            f"**Remove local uploads:** deletes {len(files_local)} file(s) from documents/: {', '.join(files_local) if files_local else 'none'}. The vector index remains unchanged."
+        )
+        if st.button("Remove all uploaded local documents", key="fresh_uploads"):
+            st.session_state.fresh_action = "uploads"
+        st.markdown(
+            f"**Clear indexed vectors:** deletes all {total_chunks} passages from Chroma collection `pdf_documents`. Uploaded files and the Chroma database folder remain unchanged."
+        )
+        if st.button("Clear all indexed vectors", key="fresh_index"):
+            st.session_state.fresh_action = "index"
+        st.markdown(
+            f"**Delete Chroma database folder:** deletes all files inside `chroma_db/` (including vectors and database metadata). Uploaded files remain unchanged."
+        )
+        if st.button("Delete Chroma database files", key="fresh_database"):
+            st.session_state.fresh_action = "database"
+        st.markdown(
+            f"**Remove uploads and clear index:** deletes the {len(files_local)} listed local upload(s) and clears all {total_chunks} indexed passages, while keeping the Chroma database folder."
+        )
+        if st.button("Remove uploads and clear index", key="fresh_both"):
+            st.session_state.fresh_action = "both"
+        st.markdown(
+            f"**Delete uploads and Chroma database:** deletes the {len(files_local)} listed local upload(s) and the entire configured `chroma_db/` folder."
+        )
+        if st.button("Delete uploads and Chroma database", key="fresh_full"):
+            st.session_state.fresh_action = "full"
+        action = st.session_state.get("fresh_action")
+        if action:
+            labels = {
+                "uploads": "local uploads only",
+                "index": "all indexed vectors only (the Chroma database folder stays)",
+                "database": "the entire chroma_db/ folder and all files in it",
+                "both": "local uploads and all indexed vectors (the Chroma database folder stays)",
+                "full": "local uploads and the entire chroma_db/ folder",
+            }
+            st.warning(
+                f"Confirm: this will permanently delete {labels[action]}. Conversations and API keys will remain."
+            )
+            confirm = st.text_input(
+                "Type DELETE to confirm", key=f"fresh_confirm_{action}"
+            )
+            a, b = st.columns(2)
+            if a.button(
+                "Confirm start fresh",
+                key=f"fresh_yes_{action}",
+                disabled=confirm != "DELETE",
+            ):
+                if action in {"uploads", "both", "full"}:
+                    for filename in files_local:
+                        try:
+                            from rag_app.storage import remove_upload
+
+                            remove_upload(filename)
+                        except OSError:
+                            log.warning("Could not remove configured upload")
+                if action in {"index", "both"}:
+                    clear_index()
+                if action in {"database", "full"}:
+                    delete_chroma_database()
+                st.session_state.pop("fresh_action")
+                st.rerun()
+            if b.button("Cancel", key=f"fresh_no_{action}"):
+                st.session_state.pop("fresh_action")
+                st.rerun()
+
+with eval_tab:
+    st.subheader("Retrieval evaluation")
+    st.caption(
+        "Add questions and expected source/page labels for your own indexed files in rag_app/evaluation.py. Retrieval metrics do not measure answer accuracy."
+    )
+    from rag_app.evaluation import run_evaluation
+
+    if st.button("Run retrieval evaluation", disabled=not files or not google_key):
+        try:
+            st.session_state.eval_results = run_evaluation(
+                google_key, top_k, retrieval_mode
+            )
+        except Exception as exc:
+            st.error(safe_error(exc, [google_key, openrouter_key]))
+    if st.session_state.get("eval_results"):
+        st.dataframe(st.session_state.eval_results, width="stretch", hide_index=True)
+        st.caption(
+            "Review the retrieved passages yourself. Recall@k and reciprocal rank measure source retrieval only, not answer accuracy."
+        )
+    else:
+        st.info(
+            "No evaluation cases are configured. Add your own questions and expected sources in rag_app/evaluation.py."
+        )
+    st.caption(
+        "Optional reranking is not enabled in this build. Scores are not compared across embedding models."
+    )
+
+st.divider()
+st.caption(
+    "GroundedIQ RAG Chatbot · LangGraph workflow · Chroma vector search · local SQLite conversation history"
 )
