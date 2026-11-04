@@ -1,3 +1,16 @@
+[theme]
+base = "light"
+primaryColor = "#2f63d8"
+backgroundColor = "#f5f8fc"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#14243b"
+font = "sans-serif"
+baseRadius = "medium"
+buttonRadius = "medium"
+showWidgetBorder = true
+paddingTop = "1.15rem"
+paddingBottom = "1.25rem"
+
 [server]
 # Keep the uploader's displayed limit aligned with rag_app.config.MAX_UPLOAD_BYTES.
 maxUploadSize = 25

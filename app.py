@@ -1,6 +1,9 @@
 """Polished Streamlit interface for the local document RAG assistant."""
 
-import logging, os, time
+import base64
+import logging
+import os
+import time
 from pathlib import Path
 import streamlit as st
 from rag_app.config import (
@@ -38,16 +41,47 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+background_image = base64.b64encode(
+    (BASE_DIR / "static" / "groundediq-document-intelligence.webp").read_bytes()
+).decode("ascii")
 st.markdown(
     """<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
-:root{--ink:#15233a;--muted:#66758a;--line:#e5ebf2;--blue:#315be8;--wash:#f5f8fc}
-.stApp{background:linear-gradient(145deg,#f9fbfe 0%,#f2f6fb 58%,#edf3fa 100%);color:var(--ink);font-family:'DM Sans',sans-serif}
-.block-container{padding-top:2rem;max-width:1440px}.hero{padding:1.55rem 1.8rem;border:1px solid #e6ebf4;border-radius:23px;background:linear-gradient(115deg,#fff 4%,#f4f7ff 70%,#f0f5ff);box-shadow:0 12px 38px #2946750b;margin-bottom:1.2rem}
-.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#526ce0;font-weight:700}.hero h1{font:800 clamp(28px,3vw,41px) 'Manrope',sans-serif;letter-spacing:-1.7px;margin:7px 0 5px;color:#16243d}.hero p{margin:0;color:#65748b;font-size:15px}
-[data-testid="stSidebar"]{background:#fff;border-right:1px solid #e7edf5}.stButton>button,.stFormSubmitButton>button{border-radius:11px;border:1px solid #dbe3ee;font-weight:600;min-height:42px}.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"]{background:#315be8;border-color:#315be8;color:white}
-[data-testid="stChatMessage"]{background:white;border:1px solid #e7edf3;border-radius:16px;padding:12px 16px;box-shadow:0 4px 16px #203d6608}.stChatInput textarea{border-radius:14px}.metric-label{color:#76859a;font-size:12px}.metric-value{font:700 24px Manrope;color:#182944}.stCaption{color:#738198}.section-note{padding:12px 14px;border-radius:12px;background:#f4f7fc;color:#65748a;font-size:13px;border:1px solid #e7edf5}
-</style>""",
+:root{--ink:#14243b;--muted:#5f7188;--line:#dfe7f1;--blue:#2f63d8;--teal:#168e91;--paper:#f5f8fc}
+.stApp{background-color:#f5f8fc;background-image:linear-gradient(180deg,rgba(248,250,253,.16) 0%,rgba(244,247,251,.36) 42%,rgba(244,247,251,.86) 78%,#edf3f9 100%),url("data:image/webp;base64,__AI_BACKGROUND_IMAGE__"),radial-gradient(ellipse at 88% 0%,rgba(219,235,255,.55),transparent 34rem);background-repeat:no-repeat,no-repeat,no-repeat;background-position:center top,top right,center;background-size:100% 100%,min(100%,1752px) auto,100% 100%;color:var(--ink);font-family:'DM Sans',sans-serif}
+.block-container{max-width:1380px;padding-bottom:1.5rem}
+.hero{padding:1.05rem 1.5rem;border:1px solid #e1e9f3;border-radius:18px;background:linear-gradient(110deg,rgba(255,255,255,.98),rgba(241,247,255,.96) 72%,rgba(234,247,248,.92));box-shadow:0 8px 26px rgba(29,57,91,.06);margin-bottom:.9rem}
+.eyebrow{font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:#286ba0;font-weight:700}.hero h1{font:800 clamp(25px,2.6vw,36px) 'Manrope',sans-serif;letter-spacing:-1.2px;margin:5px 0 3px;color:#152944}.hero p{margin:0;color:#5f7188;font-size:14px;line-height:1.45}
+[data-testid="stSidebar"]{background:linear-gradient(165deg,#142a49 0%,#10213a 52%,#0c1a2e 100%);border-right:1px solid #223956}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"]{background:transparent}
+[data-testid="stSidebar"] h1,[data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3,[data-testid="stSidebar"] p,[data-testid="stSidebar"] label,[data-testid="stSidebar"] .stMarkdown{color:#edf4fc}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p{color:#b7c8dc}
+[data-testid="stSidebar"] [data-baseweb="select"]>div,[data-testid="stSidebar"] input{background:#1b304d;color:#f5f8fc;border-color:#38516f}
+[data-testid="stSidebar"] [data-baseweb="select"] svg{fill:#c6d7e9}
+/* Keep Edge's native password reveal from duplicating Streamlit's eye toggle. */
+[data-testid="stSidebar"] input[type="password"]::-ms-reveal,[data-testid="stSidebar"] input[type="password"]::-ms-clear{display:none}
+.stButton>button,.stFormSubmitButton>button{border-radius:10px;border:1px solid #d7e2ee;font-weight:600;min-height:39px;transition:all .16s ease}
+.stButton>button:hover,.stFormSubmitButton>button:hover{border-color:#7ca7dc;color:#174f8a;box-shadow:0 3px 12px rgba(24,73,126,.09)}
+.stButton>button[kind="primary"],.stFormSubmitButton>button[kind="primary"]{background:linear-gradient(110deg,#2f63d8,#247caa);border-color:#2f63d8;color:#fff}
+[data-testid="stSidebar"] .stButton>button{background:#1a3455;border-color:#3a5678;color:#f4f8fd}
+[data-testid="stSidebar"] .stButton>button[kind="primary"]{background:linear-gradient(110deg,#3974e4,#168e91);border-color:#4384dc;color:#fff}
+[data-testid="stSidebar"] hr{border-color:#304865}
+[data-testid="stMetric"]{background:rgba(255,255,255,.88);border:1px solid #e0e8f2;border-radius:14px;padding:10px 14px;box-shadow:0 4px 16px rgba(31,58,91,.045)}
+[data-testid="stMetricLabel"]{color:#687b92;font-size:11px;font-weight:600;letter-spacing:.035em}
+[data-testid="stMetricValue"]{color:#17304e;font:700 clamp(19px,2vw,24px) 'Manrope',sans-serif}
+[data-testid="stTabs"] [data-baseweb="tab-list"]{gap:7px;border-bottom:1px solid #dce5ef}
+[data-testid="stTabs"] button[data-baseweb="tab"]{height:42px;padding:0 15px;border-radius:10px 10px 0 0;color:#63758b;font-weight:600}
+[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"]{color:#205e9d;background:rgba(228,239,251,.78);border-bottom:2px solid #168e91}
+[data-testid="stTabs"] [data-testid="stTabPanel"]{padding-top:.85rem}
+[data-testid="stChatMessage"]{background:rgba(255,255,255,.94);border:1px solid #e1e8f0;border-radius:15px;padding:11px 15px;box-shadow:0 4px 14px rgba(28,52,82,.045)}
+.stChatInput textarea{border-radius:13px;background:rgba(255,255,255,.96)}
+[data-testid="stFileUploader"] section{background:rgba(255,255,255,.78);border:1px dashed #93b8d8;border-radius:14px}
+[data-testid="stVerticalBlockBorderWrapper"]{border-color:#e1e8f0;border-radius:14px}
+[data-testid="stAlert"]{border-radius:12px}
+.stCaption,[data-testid="stCaptionContainer"]{color:#687b92}
+@media (max-width: 760px){.hero{padding:.9rem 1rem;margin-bottom:.65rem}.hero h1{font-size:clamp(23px,6vw,31px);letter-spacing:-.7px}.hero p{font-size:13px}[data-testid="stMetric"]{padding:8px 10px}[data-testid="stMetricLabel"]{font-size:10px}[data-testid="stMetricValue"]{font-size:18px}[data-testid="stTabs"] button[data-baseweb="tab"]{padding:0 10px;font-size:13px}}
+@media (max-width: 480px){.hero{border-radius:14px}.hero p{max-width:34ch}[data-testid="stMetric"]{padding:7px 8px;border-radius:11px}}
+</style>""".replace("__AI_BACKGROUND_IMAGE__", background_image),
     unsafe_allow_html=True,
 )
 DOCUMENTS_DIR.mkdir(exist_ok=True)
@@ -68,55 +102,66 @@ with st.sidebar:
     st.caption("Private document intelligence")
     st.divider()
     conversations = list_conversations()
-    if (
-        "conversation_id" not in st.session_state
-        or st.session_state.conversation_id not in {r[0] for r in conversations}
-    ):
-        st.session_state.conversation_id = create_conversation()
-        st.rerun()
+    existing_ids = {row[0] for row in conversations}
+    if st.session_state.get("conversation_id") not in existing_ids:
+        # Resume the latest saved chat on a fresh browser session. Do not make
+        # a placeholder conversation just because the app was opened.
+        st.session_state.conversation_id = conversations[0][0] if conversations else None
     if st.button(":material/add: New chat", width="stretch", type="primary"):
-        st.session_state.conversation_id = create_conversation()
+        # Reuse the current empty chat if New chat is clicked repeatedly before
+        # a first message is sent, instead of filling history with placeholders.
+        conversation_id = st.session_state.get("conversation_id")
+        if conversation_id is None or get_messages(conversation_id):
+            st.session_state.conversation_id = create_conversation()
         st.rerun()
     conversations = list_conversations()
-    selected = st.selectbox(
-        "Conversations",
-        options=[r[0] for r in conversations],
-        format_func=lambda cid: next(
-            (r[1] for r in conversations if r[0] == cid), "Conversation"
-        ),
-        index=next(
-            (
-                i
-                for i, r in enumerate(conversations)
-                if r[0] == st.session_state.conversation_id
+    selected = None
+    if conversations:
+        selected = st.selectbox(
+            "Conversations",
+            options=[row[0] for row in conversations],
+            format_func=lambda cid: next(
+                (row[1] for row in conversations if row[0] == cid), "Conversation"
             ),
-            0,
-        ),
-    )
-    if selected != st.session_state.conversation_id:
-        st.session_state.conversation_id = selected
-        st.rerun()
-    with st.expander("Conversation actions"):
-        current_name = next((r[1] for r in conversations if r[0] == selected), "")
-        new_name = st.text_input(
-            "Rename conversation", value=current_name, key="rename_value"
+            index=next(
+                (
+                    i
+                    for i, row in enumerate(conversations)
+                    if row[0] == st.session_state.conversation_id
+                ),
+                0,
+            ),
         )
-        if st.button("Save name", key="rename_chat"):
-            rename_conversation(selected, new_name)
+        if selected != st.session_state.conversation_id:
+            st.session_state.conversation_id = selected
             st.rerun()
-        if st.button("Delete this conversation", key="delete_chat"):
-            st.session_state.confirm_delete_chat = True
-        if st.session_state.get("confirm_delete_chat"):
-            st.warning("This permanently deletes this conversation and its messages.")
-            a, b = st.columns(2)
-            if a.button("Confirm delete", key="yes_delete_chat"):
-                delete_conversation(selected)
-                st.session_state.conversation_id = create_conversation()
-                st.session_state.confirm_delete_chat = False
+        with st.expander("Conversation actions"):
+            current_name = next(
+                (row[1] for row in conversations if row[0] == selected), ""
+            )
+            new_name = st.text_input(
+                "Rename conversation", value=current_name, key="rename_value"
+            )
+            if st.button("Save name", key="rename_chat"):
+                rename_conversation(selected, new_name)
                 st.rerun()
-            if b.button("Cancel", key="no_delete_chat"):
-                st.session_state.confirm_delete_chat = False
-                st.rerun()
+            if st.button("Delete this conversation", key="delete_chat"):
+                st.session_state.confirm_delete_chat = True
+            if st.session_state.get("confirm_delete_chat"):
+                st.warning(
+                    "This permanently deletes this conversation and its messages."
+                )
+                a, b = st.columns(2)
+                if a.button("Confirm delete", key="yes_delete_chat"):
+                    delete_conversation(selected)
+                    st.session_state.conversation_id = None
+                    st.session_state.confirm_delete_chat = False
+                    st.rerun()
+                if b.button("Cancel", key="no_delete_chat"):
+                    st.session_state.confirm_delete_chat = False
+                    st.rerun()
+    else:
+        st.caption("No conversations yet. Select New chat to begin.")
     st.divider()
     st.subheader("Answer engine")
     provider = st.selectbox("Provider", list(PROVIDER_MODELS), key="provider")
@@ -174,7 +219,8 @@ with m3:
 chat_tab, library_tab, eval_tab = st.tabs(["Chat", "Library & indexing", "Evaluation"])
 
 with chat_tab:
-    msgs = get_messages(st.session_state.conversation_id)
+    conversation_id = st.session_state.get("conversation_id")
+    msgs = get_messages(conversation_id) if conversation_id else []
     st.markdown("### :material/smart_toy: GroundedIQ assistant")
     st.caption(
         "Ask naturally, explore follow-ups, and open the source cards to verify each response."
@@ -232,9 +278,13 @@ with chat_tab:
     typed_question = st.chat_input("Ask GroundedIQ about your indexed documents…")
     question = st.session_state.pop("pending_prompt", None) or typed_question
     if question:
-        add_message(st.session_state.conversation_id, "user", question)
+        conversation_id = st.session_state.get("conversation_id")
+        if conversation_id is None:
+            conversation_id = create_conversation()
+            st.session_state.conversation_id = conversation_id
+        add_message(conversation_id, "user", question)
         if not files:
-            add_message(st.session_state.conversation_id, "assistant", NO_EVIDENCE)
+            add_message(conversation_id, "assistant", NO_EVIDENCE)
             st.rerun()
         if not google_key:
             st.error(
@@ -268,7 +318,7 @@ with chat_tab:
                     )
                 elapsed = time.perf_counter() - start
                 add_message(
-                    st.session_state.conversation_id,
+                    conversation_id,
                     "assistant",
                     result["answer"],
                     result.get("sources"),
